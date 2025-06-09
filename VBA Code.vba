@@ -1,104 +1,97 @@
-Sub ImportarICMSST()
-    ' Declaração de variáveis
-    Dim ws As Worksheet
-    Dim caminhoPasta As String
-    Dim chaveAcesso As String
-    Dim caminhoArquivo As String
-    Dim xmlDoc As Object
-    Dim xmlNode As Object
-    Dim tempNode As Object
-    Dim baseICMSST As String
-    Dim valorICMSST As String
-    Dim itens As Object
-    Dim item As Object
-    Dim linha As Long
-    Dim totalQtd As Double
-    Dim qComNode As Object
-    Dim noICMS As Object, noIPI As Object
-    Dim aliqICMS As String, aliqIPI As String
-    Dim ultimaLinha As Long
-    Dim encontrouICMS As Boolean
-    Dim resposta As VbMsgBoxResult
+Sub IMPORTAR_NOTA_FISCAL_CPV()
 
-    ' Define a planilha onde os dados serão inseridos
+    ' Declaração das variáveis
+    Dim ws As Worksheet ' Planilha de trabalho
+    Dim caminhoPasta As String ' Caminho onde estão os arquivos XML
+    Dim chaveAcesso As String ' Chave de acesso da nota fiscal
+    Dim caminhoArquivo As String ' Caminho completo do arquivo XML
+    Dim xmlDoc As Object ' Objeto XML para carregar o arquivo
+    Dim xmlNode As Object, tempNode As Object ' Nós temporários de leitura do XML
+    Dim baseICMSST As String, valorICMSST As String ' Valores fiscais ICMS ST
+    Dim itens As Object, item As Object ' Lista de itens da nota
+    Dim linha As Long ' Linha da planilha para escrever os itens
+    Dim totalQtd As Double ' Total de quantidade dos produtos
+    Dim qComNode As Object ' Nó da quantidade comercial
+    Dim noICMS As Object, noIPI As Object ' Nós ICMS/IPI de cada item
+    Dim aliqICMS As String, aliqIPI As String ' Alíquotas de ICMS/IPI
+    Dim ultimaLinha As Long ' Última linha preenchida da tabela
+    Dim encontrouICMS As Boolean ' Flag se encontrou ICMS
+    Dim resposta As VbMsgBoxResult ' Resposta do usuário em uma MsgBox
+    Dim xmlNodes As Object ' Lista de nós de ICMS para a nota
+
+    ' Define a planilha "CPV"
     Set ws = ThisWorkbook.Sheets("CPV")
     
-    ' Define o caminho onde os arquivos XML estão armazenados
+    ' Caminho fixo onde os arquivos XML estão localizados
     caminhoPasta = "\\SRV-RELUZ\Users\ACESSO INTERNO\DOCUMENTOS FISCAIS\XML ENTRADA\"
-    
-    ' Captura a chave de acesso da nota fiscal da célula B12 (mesmo se mesclada)
+
+    ' Lê a chave de acesso da célula B12
     chaveAcesso = Trim(ws.Range("B12").MergeArea.Cells(1, 1).Value)
 
-    ' Validação: se a chave estiver vazia, aborta
+    ' Valida se a chave foi informada
     If chaveAcesso = "" Then
         MsgBox "Chave de acesso não informada. Por favor insira a chave de acesso.", vbExclamation
         Exit Sub
     End If
 
-    ' Limpa os dados anteriores antes de importar os novos
+    ' Limpa os dados antigos da planilha
     ws.Range("H12:Q12").ClearContents
     ws.Range("N16:P16").ClearContents
     ws.Range("B20:C20").ClearContents
-    ws.Range("C27").Value = 0 ' Zera valor de referência
+    ws.Range("C27").Value = 0
 
-    ' Remove linhas de itens anteriores, se houver
+    ' Limpa a área da tabela de itens, se houver registros
     ultimaLinha = ws.Cells(ws.Rows.Count, "F").End(xlUp).Row
     If ultimaLinha >= 19 Then
-        ws.Range("F19:F" & ultimaLinha).ClearContents
-        ws.Range("G19:G" & ultimaLinha).ClearContents
-        ws.Range("H19:H" & ultimaLinha).ClearContents
-        ws.Range("I19:I" & ultimaLinha).ClearContents
-        ws.Range("J19:J" & ultimaLinha).ClearContents
-        ws.Range("K19:K" & ultimaLinha).ClearContents
-        ws.Range("N19:N" & ultimaLinha).ClearContents
-        ws.Range("O19:O" & ultimaLinha).ClearContents
+        ws.Range("F19:K" & ultimaLinha).ClearContents
+        ws.Range("N19:O" & ultimaLinha).ClearContents
     End If
 
-    ' Monta o caminho completo do arquivo XML com base na chave
+    ' Monta o caminho completo do XML com base na chave
     caminhoArquivo = caminhoPasta & chaveAcesso & ".xml"
 
-    ' Validação: se o arquivo XML não existir, aborta
+    ' Verifica se o arquivo existe
     If Dir(caminhoArquivo) = "" Then
         MsgBox "Arquivo XML não encontrado para a chave informada.", vbCritical
         Exit Sub
     End If
 
-    ' Carrega o XML no DOM
+    ' Cria e carrega o documento XML
     Set xmlDoc = CreateObject("MSXML2.DOMDocument.6.0")
     xmlDoc.Async = False
     xmlDoc.ValidateOnParse = False
     xmlDoc.Load (caminhoArquivo)
 
-    ' Validação do XML: erro de parsing
+    ' Verifica se houve erro ao carregar
     If xmlDoc.ParseError.ErrorCode <> 0 Then
         MsgBox "Erro ao carregar o XML: " & xmlDoc.ParseError.Reason, vbCritical
         Exit Sub
     End If
 
-    ' Define o namespace para permitir seleção via XPath
+    ' Define o namespace usado nas notas fiscais eletrônicas
     xmlDoc.SetProperty "SelectionNamespaces", "xmlns:nfe='http://www.portalfiscal.inf.br/nfe'"
 
-    ' --- Preenchimento de campos principais da nota ---
+    ' Captura dados principais da nota (número, série, valor dos produtos e valor total)
+    On Error Resume Next ' Impede interrupção por erro
     ws.Range("H12").Value = xmlDoc.SelectSingleNode("//nfe:ide/nfe:nNF").Text
     ws.Range("I12").Value = xmlDoc.SelectSingleNode("//nfe:ide/nfe:serie").Text
     ws.Range("K12").Value = xmlDoc.SelectSingleNode("//nfe:total/nfe:ICMSTot/nfe:vProd").Text
     ws.Range("L12").Value = xmlDoc.SelectSingleNode("//nfe:total/nfe:ICMSTot/nfe:vNF").Text
+    On Error GoTo 0 ' Retoma tratamento normal de erro
 
-    ' --- ICMS ST ---
+    ' ICMS ST – busca os campos vBCST (base) e vICMSST (valor)
+    Set xmlNodes = xmlDoc.SelectNodes("//nfe:imposto/nfe:ICMS/*")
     baseICMSST = ""
     valorICMSST = ""
 
-    ' Coleta os nós que contenham valores de ICMS ST
-    Dim xmlNodes As Object
-    Set xmlNodes = xmlDoc.SelectNodes("//nfe:ICMS/*[nfe:vBCST or nfe:vICMSST]")
-
-    ' Se não houver ICMS ST, preenche campos padrão
     If xmlNodes.Length = 0 Then
+        ' Caso não tenha ICMS ST
         ws.Range("B20").Value = 1
         ws.Range("C20").Value = 0
+        ws.Range("N12").Value = 0
         MsgBox "Nota fiscal não possui ICMS ST.", vbExclamation
     Else
-        ' Caso contrário, percorre os nós e extrai os valores
+        ' Percorre os nós de ICMS buscando as informações
         For Each xmlNode In xmlNodes
             If baseICMSST = "" Then
                 Set tempNode = xmlNode.SelectSingleNode("nfe:vBCST")
@@ -110,72 +103,74 @@ Sub ImportarICMSST()
             End If
         Next xmlNode
 
+        ' Preenche os campos na planilha com os valores encontrados
         ws.Range("B20").Value = IIf(baseICMSST = "", 1, baseICMSST)
         ws.Range("C20").Value = IIf(valorICMSST = "", 0, valorICMSST)
+        ws.Range("N12").Value = IIf(valorICMSST = "", 0, valorICMSST)
     End If
 
-    ' --- Outros campos fiscais (totais da nota) ---
+    ' Outros campos fiscais (ICMS, IPI, Frete, PIS, COFINS)
+    On Error Resume Next
     ws.Range("O12").Value = xmlDoc.SelectSingleNode("//nfe:total/nfe:ICMSTot/nfe:vICMS").Text
     ws.Range("P12").Value = xmlDoc.SelectSingleNode("//nfe:total/nfe:ICMSTot/nfe:vIPI").Text
     ws.Range("Q12").Value = xmlDoc.SelectSingleNode("//nfe:total/nfe:ICMSTot/nfe:vFrete").Text
     ws.Range("N16").Value = xmlDoc.SelectSingleNode("//nfe:total/nfe:ICMSTot/nfe:vOutro").Text
     ws.Range("O16").Value = xmlDoc.SelectSingleNode("//nfe:total/nfe:ICMSTot/nfe:vPIS").Text
     ws.Range("P16").Value = xmlDoc.SelectSingleNode("//nfe:total/nfe:ICMSTot/nfe:vCOFINS").Text
+    On Error GoTo 0
 
-    ' --- Leitura dos itens da nota fiscal ---
+    ' Percorre os itens da nota fiscal
     Set itens = xmlDoc.SelectNodes("//nfe:det")
     linha = 19
     totalQtd = 0
     encontrouICMS = False
 
     For Each item In itens
-        On Error Resume Next ' Evita que erros em campos nulos interrompam a execução
+        On Error Resume Next
 
+        ' Nome e valor unitário do produto
         ws.Range("F" & linha).Value = item.SelectSingleNode("nfe:prod/nfe:xProd").Text
         ws.Range("K" & linha).Value = item.SelectSingleNode("nfe:prod/nfe:vUnCom").Text
 
-        ' Soma a quantidade de cada item
+        ' Soma a quantidade total dos itens
         Set qComNode = item.SelectSingleNode("nfe:prod/nfe:qCom")
         If Not qComNode Is Nothing Then
-            If IsNumeric(qComNode.Text) Then
-                totalQtd = totalQtd + CDbl(qComNode.Text)
-            End If
+            If IsNumeric(qComNode.Text) Then totalQtd = totalQtd + CDbl(qComNode.Text)
         End If
 
-        ' Lê o ICMS (se existir) e grava alíquota
+        ' Busca alíquota do ICMS
         Set noICMS = item.SelectSingleNode("nfe:imposto/nfe:ICMS/*")
         If Not noICMS Is Nothing Then
             aliqICMS = noICMS.SelectSingleNode("nfe:pICMS").Text
             If IsNumeric(aliqICMS) Then
                 ws.Range("N" & linha).Value = CDbl(aliqICMS) / 1000000
-                encontrouICMS = True ' Marca que encontrou pelo menos um ICMS
+                encontrouICMS = True
             End If
         End If
 
-        ' Lê o IPI (se existir) e grava alíquota
+        ' Busca alíquota do IPI
         Set noIPI = item.SelectSingleNode("nfe:imposto/nfe:IPI/nfe:IPITrib")
         If Not noIPI Is Nothing Then
             aliqIPI = noIPI.SelectSingleNode("nfe:pIPI").Text
-            If IsNumeric(aliqIPI) Then
-                ws.Range("O" & linha).Value = CDbl(aliqIPI) / 1000000
-            End If
+            If IsNumeric(aliqIPI) Then ws.Range("O" & linha).Value = CDbl(aliqIPI) / 1000000
         End If
 
         On Error GoTo 0
-        linha = linha + 1 ' Avança para próxima linha
+        linha = linha + 1
     Next item
 
-    ' --- Regra específica: se não encontrou ICMS, verificar se a nota é de PE ---
+    ' Caso nenhum item tenha ICMS, pode ser uma nota de PE (regra interna)
     If Not encontrouICMS Then
         MsgBox "Nota fiscal não possui ICMS nos produtos.", vbExclamation
         resposta = MsgBox("A nota fiscal pertence ao estado de Pernambuco (PE)?", vbYesNo + vbQuestion, "Confirmação")
         If resposta = vbYes Then
-            ws.Range("C27").Value = 0.205 ' Valor padrão para PE
+            ws.Range("C27").Value = 0.205
         Else
-            ws.Range("C27").Value = 0.04 ' Valor padrão para demais estados
+            ws.Range("C27").Value = 0.04
         End If
     End If
 
-    ' Mensagem final de sucesso
+    ' Finalização
     MsgBox "Importação concluída com sucesso!", vbInformation
+
 End Sub
